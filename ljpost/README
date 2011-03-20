@@ -1,0 +1,11 @@
+A simple PHP script to post a blog entry into LiveJournal.
+
+The script expects the blog post to be in "markdown" format[1], uses the
+excellent PHP markdown script[2] by Michel Fortin to convert the entry to HTML
+("markup") and posts to LiveJournal using its XMLRPC interface.
+
+The script uses LiveJournal challenge-response to pass the credentials and does
+not transmit passwords in plaintext over the wire.
+
+[1] http://daringfireball.net/projects/markdown/syntax
+[2] http://michelf.com/projects/php-markdown/

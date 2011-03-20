@@ -1,0 +1,264 @@
+#!/usr/bin/env php
+<?php
+error_reporting(0);
+
+require 'markdown.php';
+
+$stdin = fopen('php://stdin', 'r');
+
+if ($argc == 3) {
+    $username = $argv[1];
+    $blog_entry = file_get_contents($argv[2]);
+    if (!$blog_entry) {
+        error_log("Unable to read blog post from '{$argv[2]}'");
+        exit(3);
+    }
+} elseif ($argc == 4) {
+    $username = $argv[1];
+    $blog_entry = file_get_contents($argv[2]);
+    if (!$blog_entry) {
+        error_log("Unable to read blog post from '{$argv[2]}'");
+        exit(3);
+    }
+    $taglist = $argv[3];
+} else {
+    error_log("Usage: {$argv[0]} username blog-entry-file [taglist]
+The password is read from console.\n");
+    exit(1);
+}
+
+$password = read_password();
+
+$challenge = lj_get_challenge();
+if ($challenge) {
+    $post = lj_post($username, $password, $challenge, $blog_entry, $taglist);
+    if (isset($post['url'])) {
+        echo "Post successful - {$post['url']}\n";
+    }
+}
+
+/* End of main. */
+
+/* Get the challenge from LiveJournal. */
+function lj_get_challenge()
+{
+    $cache_file = '/tmp/ljpost';
+    
+    $schallenge = file_get_contents($cache_file);
+    if ($schallenge) {
+        $cur_challenge = unserialize($schallenge);
+        if (isset($cur_challenge) && isset($cur_challenge['expire_time'])) {
+            // if we have enough buffer time
+            if (time() + 10 < $cur_challenge['expire_time']) {
+                error_log("Returning from cache");
+                return $cur_challenge['challenge'];
+            }
+        }
+    }
+    
+    $challenge_response = make_lj_call('getchallenge', false);
+    $schallenge = serialize($challenge_response);
+    file_put_contents($cache_file, $schallenge);
+    return $challenge_response['challenge'];
+}
+
+/* Post a blog entry into LiveJournal. */
+function lj_post($username, $password, $challenge, $post, $taglist)
+{
+    $html_post = Markdown($post);
+    if (preg_match('/<h2>(.*)<\/h2>/', $html_post, $match)) {
+        $subject = $match[1];
+        // Now that we have got a subject, swallow the H2 which otherwise
+        // would look ugly in the post!
+        $html_post = preg_replace('/<h2>(.*)<\/h2>/', '', $html_post);
+    } else {
+        $subject = '';
+    }
+    $now = localtime();
+    $response = md5($challenge.md5($password));
+    $params = array('username' => $username,
+            'auth_method' => 'challenge',
+            'auth_challenge' => $challenge,
+            'auth_response' => $response,
+            'event' => $html_post,
+            'subject' => $subject,
+            'lineendings' => 'unix',
+            'year' => 1900 + $now[5],
+            'mon' => $now[4] + 1,
+            'day' => $now[3] + 1,
+            'hour' => $now[2],
+            'min' => $now[1]);
+    if ($taglist) {
+        $params['props'] = array('taglist' => $taglist);
+    }
+    return make_lj_call('postevent', $params);
+}
+
+/*
+Make a LiveJournal API $method call passing $params as its parameters.
+
+The $params is an associative array with key as the parameter name and value as
+the parameter value.  The type of value should match the signature of the
+API call.  If the value is another associative array, the type is assumed to be
+a struct.
+*/
+function make_lj_call($method, $params)
+{
+    $payload = <<<__XML__
+<?xml version="1.0"?>
+<methodCall>
+  <methodName>LJ.XMLRPC.$method</methodName>
+  <params>
+
+__XML__;
+
+    if ($params) {
+        $payload .= <<<__XML__
+    <param><value><struct>
+
+__XML__;
+        $payload .= make_xmlrpc_payload($params);
+        $payload .= <<<__XML__
+    </struct></value></param>
+
+__XML__;
+    } else {
+        $payload .= <<<__XML__
+    <param><struct></struct></param>
+
+__XML__;
+    }
+    
+    $payload .= <<<__XML__
+  </params>
+</methodCall>
+
+__XML__;
+
+    $ch = curl_init('http://www.livejournal.com/interface/xmlrpc');
+    $output = false;
+    if ($ch) {
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
+        $output = curl_exec($ch);
+        curl_close($ch);
+    }
+    return parse_xmlrpc_response($output);
+}
+
+/* Make an XML-RPC payload out of the passed parameters. */
+function make_xmlrpc_payload($params)
+{
+    $payload = '';
+    foreach ($params as $name => $value) {
+        if (is_int($value) || is_float($value)) {
+            $payload .= <<<__XML__
+      <member>
+        <name>$name</name>
+        <value><int>$value</int></value>
+      </member>
+
+__XML__;
+        } elseif (is_string($value)) {
+            $payload .= <<<__XML__
+      <member>
+        <name>$name</name>
+        <value><string><![CDATA[$value]]></string></value>
+      </member>
+
+__XML__;
+        } elseif (is_array($value)) {
+            $payload .= <<<__XML__
+      <member>
+        <name>$name</name>
+        <value>
+          <struct>
+
+__XML__;
+            $payload .= make_xmlrpc_payload($value);
+            $payload .= <<<__XML__
+          </struct>
+        </value>
+      </member>
+
+__XML__;
+        }
+    }
+    return $payload;
+}
+
+/* Parse and return an XML-RPC response. */
+function parse_xmlrpc_response($input)
+{
+    $response = simplexml_load_string($input);
+    $fmt_response = false;
+    if (!isset($response->fault)) {
+        $fmt_response = array();
+        foreach ($response->params->param->value->struct->member as $item) {
+            list($name, $val) = each(parse_xmlrpc_member_response($item));
+            $fmt_response[$name] = $val;
+        }
+    }
+    return $fmt_response;
+}
+
+/* Parse a subset of XML-RPC response, specifically a member. */
+function parse_xmlrpc_member_response($member)
+{
+    $response = array();
+    if (isset($member->value->int)) {
+        $response[(string)$member->name] = (int)$member->value->int;
+    } elseif (isset($member->value->i4)) {
+        $response[(string)$member->name] = (int)$member->value->i4;
+    } elseif (isset($member->value->boolean)) {
+        $response[(string)$member->name] = (bool)$member->value->boolean;
+    } elseif (isset($member->value->double)) {
+        $response[(string)$member->name] = (double)$member->value->double;
+    } elseif (isset($member->value->base64)) {
+        $response[(string)$member->name] = (string)$member->value->base64;
+    } elseif (isset($member->value->string)) {
+        $response[(string)$member->name] = (string)$member->value->string;
+    } elseif (isset($member->value->array)) {
+        if (isset($member->value->array->data->value)) {
+            $avalue = array();
+            foreach ($member->value->array->data->value as $array) {
+                $avalue[] = parse_xmlrpc_member_response($array);
+            }
+            $response[(string)$member->name] = $avalue;
+        } else {
+            $response[(string)$member->name] = '';
+        }
+    } elseif (isset($member->struct)) {
+        foreach ($member->struct->member as $m) {
+            $response[] = parse_xmlrpc_member_response($m);
+        }
+    }
+    return $response;
+}
+
+/* Read blog post from standard input. */
+function read_blog_entry()
+{
+    global $stdin;
+
+    $blog_entry = '';
+    while (!feof($stdin)) {
+        $blog_entry .= fgets($stdin, 1024);
+    }
+    return $blog_entry;
+}
+
+/* Read password from the console (without echo.) */
+function read_password()
+{
+    global $stdin;
+    
+    echo 'Password:';
+    system('stty -echo');
+    fflush($stdin);
+    $password = trim(fgets($stdin, 1024));
+    system('stty echo');
+    echo "\n";
+    return $password;
+}

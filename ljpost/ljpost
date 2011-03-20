@@ -1,10 +1,36 @@
 #!/usr/bin/env php
 <?php
+/*
+A simple PHP script to post a blog entry into LiveJournal.
+Copyright (C) 2011  Gopal Venkatesan
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+You can find the original version of this program from:
+https://github.com/g13n/projects/tree/master/ljpost
+*/
+
 error_reporting(0);
 
-require 'markdown.php';
+include 'markdown.php';
+if (!function_exists('Markdown')) {
+    usage_exit(1, "Unable to find Markdown library, download it from:
+http://michelf.com/projects/php-markdown/");
+}
 
 $stdin = fopen('php://stdin', 'r');
+$prog = $argv[0];
 
 if ($argc == 3) {
     $username = $argv[1];
@@ -22,9 +48,7 @@ if ($argc == 3) {
     }
     $taglist = $argv[3];
 } else {
-    error_log("Usage: {$argv[0]} username blog-entry-file [taglist]
-The password is read from console.\n");
-    exit(1);
+    usage_exit(2);
 }
 
 $password = read_password();
@@ -261,4 +285,40 @@ function read_password()
     system('stty echo');
     echo "\n";
     return $password;
+}
+
+/* Print the program license, usage and die. */
+function usage_exit($status, $message)
+{
+    global $prog;
+
+    $help_text = <<<__HELP__
+Usage: $prog username blog-entry [taglist]
+$prog  Copyright (C) 2011  Gopal Venkatesan
+This program comes with ABSOLUTELY NO WARRANTY; for details see
+<http://www.gnu.org/licenses/>.
+
+__HELP__;
+
+    if (!$message) {
+        $message = <<<__MSG__
+A simple PHP script to post a blog entry into LiveJournal.
+
+The options are as follows:
+
+     username
+                The LiveJournal username
+
+     blog-entry
+                The path to the file containing the blog entry
+
+     taglist
+                Comma separated list of tags
+
+The password is read from console.
+__MSG__;
+    }
+
+    error_log("$help_text\n$message\n");
+    exit($status);
 }

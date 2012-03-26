@@ -1,0 +1,165 @@
+#!/usr/bin/env php
+<?php
+/**
+ * A simple WordPress to Jekyll migration utility.
+ *
+ * It is expected that you run this program from the machine that runs
+ * WordPress.
+ *
+ * @author Gopal Venkatesan <gv@g13n.me>
+ * @copyright 2012 Gopal Venkatesan
+ * @version 1
+ */
+
+$prog = $argv[0];
+$args = getopt('b:m:o:');
+
+if (empty($args['b']) || empty($args['o'])) {
+    usageExit(1, $prog, "The -b and -o options are mandatory.");
+}
+
+$blogDir  = $args['b'];
+$postsDir = $args['o'];
+$markDown = isset($args['m']) ? $args['m'] : false;
+
+if (!file_exists($blogDir)) {
+    usageExit(2, $prog, "Blog directory ($blogDir) does not exist.");
+}
+
+$blogDir = preg_replace('%/$%', '', $blogDir);
+
+if (!file_exists($postsDir)) {
+    usageExit(3, $prog, "Output directory ($postsDir) does not exist.");
+}
+
+if (!is_writable($postsDir)) {
+    usageExit(4, $prog, "Output directory ($postsDir) is read-only.");
+}
+
+exportPosts($blogDir, $postsDir, $markDown);
+
+/* End main: */
+
+/**
+ * Export posts in Jekyll format into the output directory.
+ *
+ * @param $blogDir   The blog directory that houses the WordPress instance
+ * @param $outputDir The output directory where files need to be written
+ * @param $markDown  The path to the markDown library, or false if not required
+ */
+function exportPosts($blogDir, $outputDir, $markDown = false)
+{
+    global $wpdb, $wp_rewrite;  // that's needed for WordPress
+    
+    include "$blogDir/wp-load.php";
+
+    if ($markDown) {
+        $ok = include $markDown;
+        if ($ok && class_exists('Markdownify')) {
+            $markDown = new Markdownify();
+        } else {
+            $markDown = false;
+        }
+    }
+
+    foreach ($wpdb->get_results("SELECT * FROM {$wpdb->posts}
+                                 WHERE post_status = 'publish'
+                                 ORDER BY post_date DESC") as $row) {
+        $isPublished = $row->post_status=='publish' ? 'true' : 'false';
+        $meta        = getPostMeta($wpdb, $row->post_id);
+        
+        $categories  = '';
+        if ($meta->categories) {
+            $categories = join(', ', $meta->categories);
+        }
+        
+        $tags  = '';
+        if ($meta->tags) {
+            $tags = join(', ', $meta->tags);
+        }
+        
+        $yamlFrontMatter = <<<__EOF__
+---
+layout     : post
+categories : [{$categories}]
+date       : {$row->post_date}
+published  : $isPublished
+tags       : [{$tags}]
+title      : "{$row->post_title}"
+single     : true
+---
+
+__EOF__;
+
+        $post  = $markDown ? $markDown->parseString($row->post_content)
+                          : $row->post_content;
+        $name  = substr($row->post_date, 0, strpos($row->post_date, ' '));
+        $name .= "-{$row->post_name}.markdown";
+        $name  = "$outputDir/$name";
+        if (file_put_contents($name, "$yamlFrontMatter$post") === false) {
+            error_log("Error writing $name");
+        }
+    }
+}
+
+/**
+ * Return the categories and tags for the given post.
+ *
+ * @param $wpdb   The WordPress DB instance
+ * @param $postID The post ID for which the meta information need to be returned
+ * @return An object having an array of categories and tags
+ */
+function getPostMeta($wpdb, $postID)
+{
+    $meta = new stdClass();
+    $meta->categories = array();
+    $meta->tags       = array();
+    
+    $sql = <<<__SQL__
+SELECT t.*, tt.*, tr.object_id
+FROM {$wpdb->terms} AS t INNER JOIN {$wpdb->term_taxonomy} AS tt
+ON tt.term_id = t.term_id INNER JOIN {$wpdb->term_relationships} AS tr
+ON tr.term_taxonomy_id = tt.term_taxonomy_id
+WHERE tt.taxonomy IN ('category', 'post_tag')
+AND tr.object_id IN (4) ORDER BY t.name ASC
+__SQL__;
+
+    foreach ($wpdb->get_results($sql) as $row) {
+        if ($row->taxonomy == 'post_tag') {
+            $meta->tags[] = $row->name;
+        } elseif ($row->taxonomy == 'category' &&
+                  $row->name     != 'Uncategorized') {
+            $meta->category[] = $row->name;
+        }
+    }
+
+    return $meta;
+}
+
+/**
+ * Print the program usage and die.
+ */
+function usageExit($rv, $prog, $msg = false)
+{
+    if ($msg) {
+        $msg = "Error: $msg\n\n";
+    }
+
+    $msg .= <<<__EOF__
+usage: $prog -b dir [-m dir] -o dir
+
+-b dir
+        The WordPress installation directory
+
+-m path
+        Path to the PHP Markdownify library.  If not specified, the posts would be
+        exported as it is.
+
+-o dir
+        The Jekyll posts output directory.  This directory must be writable.
+
+__EOF__;
+
+        error_log($msg);
+        exit($rv);
+}

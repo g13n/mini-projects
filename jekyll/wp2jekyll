@@ -87,6 +87,7 @@ published  : $isPublished
 tags       : [{$tags}]
 title      : "{$row->post_title}"
 single     : true
+postid     : {$row->ID}
 ---
 
 __EOF__;

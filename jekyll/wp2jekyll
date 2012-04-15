@@ -66,7 +66,7 @@ function exportPosts($blogDir, $outputDir, $markDown = false)
                                  WHERE post_status = 'publish'
                                  ORDER BY post_date DESC") as $row) {
         $isPublished = $row->post_status=='publish' ? 'true' : 'false';
-        $meta        = getPostMeta($wpdb, $row->post_id);
+        $meta        = getPostMeta($wpdb, $row->ID);
         
         $categories  = '';
         if ($meta->categories) {
@@ -87,6 +87,7 @@ published  : $isPublished
 tags       : [{$tags}]
 title      : "{$row->post_title}"
 single     : true
+postid     : {$row->ID}
 ---
 
 __EOF__;
@@ -121,7 +122,7 @@ FROM {$wpdb->terms} AS t INNER JOIN {$wpdb->term_taxonomy} AS tt
 ON tt.term_id = t.term_id INNER JOIN {$wpdb->term_relationships} AS tr
 ON tr.term_taxonomy_id = tt.term_taxonomy_id
 WHERE tt.taxonomy IN ('category', 'post_tag')
-AND tr.object_id IN (4) ORDER BY t.name ASC
+AND tr.object_id IN ($postID) ORDER BY t.name ASC
 __SQL__;
 
     foreach ($wpdb->get_results($sql) as $row) {

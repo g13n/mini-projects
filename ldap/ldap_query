@@ -1,0 +1,87 @@
+#!/bin/sh
+
+##
+## Query an LDAP Server
+##
+## Author
+##     Gopal Venkatesan <gv@g13n.me>
+##
+## Version
+##     1.0.1
+##
+## Usage
+##     ldap_query -b base-dn -h host -p port query
+##
+
+PATH=/bin:/usr/bin
+
+#
+# Perform LDAP query against displayName and mail and output the result as
+# "Display Name <email>"
+#
+# Parameters
+#     $1 base DN
+#     $2 host name
+#     $3 port
+#     $4 query
+#
+do_ldap_query() {
+    ldapsearch -b $1 -h $2 -p $3 "(|(givenname=$4*)(mail=$4*))" -x |
+        awk 'BEGIN { FS=":[ \t]*" }
+             /^dn:/,/^ *$/ {
+                 if (match($1, /mail/)) {
+                     mail = $2
+                 } else if (match($1, /displayName/)) {
+                     display_name = $2
+                 }
+                 if (mail && display_name) {
+                     printf "\"%s\" <%s>\n", display_name, mail
+                     mail = ""
+                     display_name = ""
+                 }
+             }'
+}
+
+#
+# Print usage information and die
+#
+usage_exit() {
+    echo "$0 -b base-dn -h host -p port query" 1>&2
+    exit 2
+}
+
+##
+## Main
+##
+
+while getopts "b:h:p:" argument
+do
+    case $argument in
+        b)  base_dn="$OPTARG"
+            ;;
+        h)  host="$OPTARG"
+            ;;
+        p)  port=$OPTARG
+            ;;
+        ?)  usage_exit
+            ;;
+    esac
+done
+
+if [ -z "$base_dn" -o -z "$host" -o -z "$port" ]
+then
+    usage_exit
+fi
+
+shift $(($OPTIND - 1))
+if [ $# -ne 1 ]
+then
+    usage_exit
+fi
+
+do_ldap_query $base_dn $host $port $1
+
+# ;;; Local Variables: ***
+# ;;; mode: shell-script ***
+# ;;; indent-tabs-mode: nil ***
+# ;;; End: ***
